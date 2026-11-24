@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Game timer</title>
+<meta name="theme-color" content="#0f5a35">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Game Timer">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{
+  --ok:#2f6f5e; --warn:#b8741a; --end:#a8332b; --idle:#3a4b5e; --chip:#223040;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:"Barlow Condensed","Arial Narrow",Impact,sans-serif;color:#fff;background:#0f5a35 radial-gradient(ellipse at center,#17794b 0%,#0f5a35 62%,#0a4228 100%);
+  -webkit-tap-highlight-color:transparent;user-select:none;touch-action:manipulation;overflow:hidden}
+
+#stage{height:100%;display:flex;align-items:center;justify-content:center}
+#dial{position:relative;width:min(94vw,86vh);aspect-ratio:1}
+#dial svg{width:100%;height:100%;display:block;pointer-events:none}
+#reset{
+  position:absolute;left:50%;top:50%;width:36%;height:36%;transform:translate(-50%,-50%);border-radius:50%;
+  border:.9vmin solid #fff;box-shadow:0 0 0 .6vmin rgba(0,0,0,.35);background:hsl(130 78% 44%);cursor:pointer;transition:opacity .15s
+}
+#reset:active{filter:brightness(.8)}
+#reset:focus-visible{outline:5px solid #fff;outline-offset:6px}
+#reset.cool{opacity:.55}
+#reset.holding{transform:translate(-50%,-50%) scale(.9)}
+#reset{-webkit-touch-callout:none}
+#toast{position:absolute;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:10px 18px;border-radius:999px;font-size:1.3rem;opacity:0;pointer-events:none;transition:opacity .2s;z-index:20;white-space:nowrap}
+#toast.show{opacity:1}
+#cfg .chips{flex-wrap:wrap;justify-content:center;max-width:90vw}
+#cfg .chips button{min-width:0;height:52px;font-size:1.5rem}
+#cfg .chips button.on{background:#17794b;border-color:#fff}
+#gear{position:absolute;left:calc(env(safe-area-inset-left,0px) + 6px);top:calc(env(safe-area-inset-top,0px) + 6px);
+  width:44px;height:44px;border-radius:50%;border:0;background:rgba(0,0,0,.25);color:#fff;font-size:1.4rem;opacity:.6}
+#cfg{position:absolute;inset:0;background:rgba(10,18,27,.94);display:none;flex-direction:column;align-items:center;justify-content:center;gap:22px;z-index:10;font-size:2rem}
+#cfg.open{display:flex}
+#cfg .row{display:flex;gap:14px;align-items:center}
+#cfg button{font:inherit;font-size:2rem;color:#fff;background:var(--chip);border:1px solid #556a80;border-radius:14px;min-width:64px;height:64px;padding:0 18px;cursor:pointer}
+#cfg button:focus-visible{outline:3px solid #fff}
+#len{min-width:3.4em;text-align:center;font-variant-numeric:tabular-nums;font-size:2.6rem}
+#cfgnote{font-size:1.1rem;opacity:.7}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body class="idle">
+<button id="gear" aria-label="Settings (press and hold)">⚙</button>
+<main id="stage">
+  <div id="dial">
+    <svg viewBox="0 0 200 200" aria-hidden="true">
+      <circle cx="100" cy="100" r="98" fill="rgba(0,0,0,.28)"/>
+      <circle cx="100" cy="100" r="86" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="12"/>
+      <g id="ticks" stroke="#fff" stroke-linecap="round"></g>
+      <g id="sweep" transform="rotate(0 100 100)">
+        <circle id="arc" cx="100" cy="100" r="86" fill="none" stroke="#fff" stroke-width="12" transform="rotate(-90 100 100)" stroke-dasharray="540.4 540.4"/>
+        <line x1="100" y1="100" x2="100" y2="8" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+      </g>
+    </svg>
+    <button id="reset" aria-label="Reset timer"></button>
+  </div>
+</main>
+<div id="status" class="sr" role="status" aria-live="polite"></div>
+<div id="toast"></div>
+<div id="cfg" role="dialog" aria-label="Timer settings">
+  <div class="row"><button id="minus" aria-label="Shorter">−</button><span id="len">2:00</span><button id="plus" aria-label="Longer">+</button></div>
+  <div class="row chips" id="chips"></div>
+  <div class="row"><button id="snd" aria-pressed="true">Sound on</button></div>
+  <div class="row"><button id="done">Done</button></div>
+  <div id="cfgnote">Picking a time stops the timer.<br>To stop it at any time, hold the center button for one second.</div>
+</div>
+<script>
+(function(){
+  var length = 120, endAt = 0, raf = 0, sound = true, ctx = null, lockUntil = 0, lastShown = -1;
+  var COOLDOWN = 800, C = 2 * Math.PI * 86;
+  var body = document.body, btn = document.getElementById('reset'), lenEl = document.getElementById('len'),
+      cfg = document.getElementById('cfg'), sweep = document.getElementById('sweep'), arc = document.getElementById('arc'),
+      status = document.getElementById('status'), toast = document.getElementById('toast'), chipBox = null;
+  try{ var s = parseInt(localStorage.getItem('gt_len'),10); if(s>=5 && s<=3600) length = s; }catch(e){}
+
+  // 60 tick marks, a longer one every 5 (twelve equal parts of the timer)
+  var ticks = document.getElementById('ticks'), NS = 'http://www.w3.org/2000/svg';
+  for(var i=0;i<60;i++){
+    var major = i%5===0, ln = document.createElementNS(NS,'line');
+    ln.setAttribute('x1',100); ln.setAttribute('x2',100);
+    ln.setAttribute('y1', major ? 22 : 26); ln.setAttribute('y2', 32);
+    ln.setAttribute('stroke-width', major ? 2.6 : 1); ln.setAttribute('opacity', major ? .95 : .5);
+    ln.setAttribute('transform','rotate('+(i*6)+' 100 100)');
+    ticks.appendChild(ln);
+  }
+
+  function fmt(sec){ var m = Math.floor(sec/60), r = sec%60; return m + ':' + (r<10?'0':'') + r; }
+  function beep(freq, dur){
+    if(!sound) return;
+    try{
+      ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(.25, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + dur);
+      o.start(); o.stop(ctx.currentTime + dur);
+    }catch(e){}
+  }
+  function draw(frac){
+    sweep.setAttribute('transform','rotate('+((1-frac)*360)+' 100 100)');
+    var d = C * frac; arc.setAttribute('stroke-dasharray', d + ' ' + C);
+    btn.style.background = 'hsl(' + Math.round(130*frac) + ' 78% 44%)';
+  }
+  function showIdle(){
+    cancelAnimationFrame(raf); body.className = 'idle'; draw(1);
+    lenEl.textContent = fmt(length); status.textContent = 'Ready'; if(chipBox) renderChips();
+  }
+  function tick(){
+    var left = Math.max(0, endAt - performance.now()), secs = Math.ceil(left/1000);
+    draw(left/(length*1000));
+    if(secs !== lastShown){
+      lastShown = secs;
+      if(secs <= 10 && secs > 0) beep(660, .08);
+    }
+    body.className = left === 0 ? 'end' : (secs <= 10 ? 'warn' : 'run');
+    if(left === 0){ status.textContent = 'Time’s up'; beep(220, .9); return; }
+    raf = requestAnimationFrame(tick);
+  }
+  function start(){
+    var now = performance.now();
+    if(now < lockUntil) return;
+    lockUntil = now + COOLDOWN;
+    btn.classList.add('cool'); setTimeout(function(){ btn.classList.remove('cool'); }, COOLDOWN);
+    lastShown = -1; endAt = now + length*1000; status.textContent = 'Running';
+    cancelAnimationFrame(raf); tick();
+  }
+  var holdBtn = 0, suppress = false, toastT = 0;
+  function say(t){ toast.textContent = t; toast.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(function(){ toast.classList.remove('show'); }, 1800); }
+  function stop(){ showIdle(); say('Stopped'); }
+  btn.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+  btn.addEventListener('pointerdown', function(){ suppress = false; btn.classList.add('holding'); holdBtn = setTimeout(function(){ suppress = true; btn.classList.remove('holding'); stop(); }, 900); });
+  ['pointerup','pointerleave','pointercancel'].forEach(function(ev){ btn.addEventListener(ev, function(){ clearTimeout(holdBtn); btn.classList.remove('holding'); }); });
+  btn.addEventListener('click', function(){ if(suppress){ suppress = false; return; } start(); });
+  document.addEventListener('keydown', function(e){
+    if(cfg.classList.contains('open')) return;
+    if(e.code === 'Space' || e.code === 'Enter'){ e.preventDefault(); start(); }
+    else if(e.code === 'Escape' || e.code === 'KeyS'){ stop(); }
+  });
+
+  // Settings hidden behind a press-and-hold so a stray touch can't change anything
+  var gear = document.getElementById('gear'), holdT = 0;
+  function openCfg(){ holdT = 0; cfg.classList.add('open'); }
+  gear.addEventListener('pointerdown', function(){ holdT = setTimeout(openCfg, 800); });
+  gear.addEventListener('pointerup', function(){ if(holdT){ clearTimeout(holdT); holdT = 0; say('Press and hold to open settings'); } });
+  ['pointerleave','pointercancel'].forEach(function(ev){ gear.addEventListener(ev, function(){ clearTimeout(holdT); holdT = 0; }); });
+  gear.addEventListener('keydown', function(e){ if(e.code === 'Enter' || e.code === 'Space'){ e.preventDefault(); openCfg(); } });
+  document.getElementById('done').addEventListener('click', function(){ cfg.classList.remove('open'); });
+  function setLen(d){
+    length = Math.min(3600, Math.max(5, length + d));
+    try{ localStorage.setItem('gt_len', String(length)); }catch(e){}
+    showIdle();
+  }
+  document.getElementById('minus').addEventListener('click', function(){ setLen(length > 60 ? -15 : -5); });
+  document.getElementById('plus').addEventListener('click', function(){ setLen(length >= 60 ? 15 : 5); });
+  chipBox = document.getElementById('chips');
+  var PRESETS = [30,60,90,120,180,300];
+  function renderChips(){
+    chipBox.innerHTML = '';
+    PRESETS.forEach(function(p){
+      var b = document.createElement('button'); b.textContent = fmt(p); if(p === length) b.className = 'on';
+      b.addEventListener('click', function(){
+        length = p; try{ localStorage.setItem('gt_len', String(length)); }catch(e){}
+        showIdle();
+      });
+      chipBox.appendChild(b);
+    });
+  }
+  var sb = document.getElementById('snd');
+  sb.addEventListener('click', function(){ sound = !sound; sb.textContent = sound ? 'Sound on' : 'Sound off'; sb.setAttribute('aria-pressed', sound); });
+  showIdle();
+})();
+</script>
+<script>
+// Keep the screen on while the page is open, and register the offline cache.
+(function(){
+  var lock = null;
+  function acquire(){
+    try{
+      if('wakeLock' in navigator && !lock){
+        navigator.wakeLock.request('screen').then(function(l){
+          lock = l; l.addEventListener('release', function(){ lock = null; });
+        }).catch(function(){});
+      }
+    }catch(e){}
+  }
+  document.addEventListener('pointerdown', acquire);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') acquire(); });
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){ navigator.serviceWorker.register('sw.js').catch(function(){}); });
+  }
+})();
+</script>
+</body>
+</html>
